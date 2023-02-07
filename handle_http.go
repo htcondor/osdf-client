@@ -24,6 +24,10 @@ import (
 	"github.com/studio-b12/gowebdav"
 	"github.com/vbauerster/mpb/v7"
 	"github.com/vbauerster/mpb/v7/decor"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 var p = mpb.New()
@@ -86,6 +90,9 @@ type TransferDetails struct {
 
 	// Proxy specifies if a proxy should be used
 	Proxy bool
+
+	// Cache being accessed
+	Cache Cache
 }
 
 // NewTransferDetails creates the TransferDetails struct with the given cache
@@ -122,6 +129,7 @@ func NewTransferDetails(cache Cache, https bool) []TransferDetails {
 			details = append(details, TransferDetails{
 				Url:   *cacheURL,
 				Proxy: false,
+				Cache: cache,
 			})
 			// Strip the port off and add 8443
 			cacheURL.Host = cacheURL.Host[:len(cacheURL.Host)-5] + ":8443"
@@ -130,6 +138,7 @@ func NewTransferDetails(cache Cache, https bool) []TransferDetails {
 		details = append(details, TransferDetails{
 			Url:   *cacheURL,
 			Proxy: false,
+			Cache: cache,
 		})
 	} else {
 		cacheURL.Scheme = "http"
@@ -139,11 +148,13 @@ func NewTransferDetails(cache Cache, https bool) []TransferDetails {
 		details = append(details, TransferDetails{
 			Url:   *cacheURL,
 			Proxy: true,
+			Cache: cache,
 		})
 		if canDisableProxy {
 			details = append(details, TransferDetails{
 				Url:   *cacheURL,
 				Proxy: false,
+				Cache: cache,
 			})
 		}
 	}
@@ -156,7 +167,7 @@ type TransferResults struct {
 	Downloaded int64
 }
 
-func download_http(source string, destination string, payload *payloadStruct, namespace Namespace, recursive bool, tokenName string) (bytesTransferred int64, err error) {
+func download_http(ctx context.Context, source string, destination string, payload *payloadStruct, namespace Namespace, recursive bool, tokenName string) (bytesTransferred int64, err error) {
 
 	// First, create a handler for any panics that occur
 	defer func() {
@@ -170,6 +181,9 @@ func download_http(source string, destination string, payload *payloadStruct, na
 			AddError(errors.New(ret))
 		}
 	}()
+
+	spanCtx, span := otel.Tracer(name).Start(ctx, "stashcp.download_http")
+	defer span.End()
 
 	// Generate the downloadUrl
 	var token string
@@ -216,6 +230,7 @@ func download_http(source string, destination string, payload *payloadStruct, na
 		cachesToTry = len(closestNamespaceCaches)
 	}
 	log.Debugln("Trying the caches:", closestNamespaceCaches[:cachesToTry])
+	span.SetAttributes(attribute.String("caches", fmt.Sprintf("%v", closestNamespaceCaches[:cachesToTry])))
 	var transfers []TransferDetails
 	downloadUrl := url.URL{Path: source}
 	var files []string
@@ -253,7 +268,7 @@ func download_http(source string, destination string, payload *payloadStruct, na
 	// Start the workers
 	for i := 1; i <= 5; i++ {
 		wg.Add(1)
-		go startDownloadWorker(source, destination, token, transfers, &wg, workChan, results)
+		go startDownloadWorker(spanCtx, source, destination, token, transfers, &wg, workChan, results)
 	}
 
 	// For each file, send it to the worker
@@ -285,7 +300,7 @@ func download_http(source string, destination string, payload *payloadStruct, na
 
 }
 
-func startDownloadWorker(source string, destination string, token string, transfers []TransferDetails, wg *sync.WaitGroup, workChan <-chan string, results chan<- TransferResults) {
+func startDownloadWorker(ctx context.Context, source string, destination string, token string, transfers []TransferDetails, wg *sync.WaitGroup, workChan <-chan string, results chan<- TransferResults) {
 
 	defer wg.Done()
 	var success bool
@@ -301,18 +316,35 @@ func startDownloadWorker(source string, destination string, token string, transf
 			continue
 		}
 		for _, transfer := range transfers {
+			// New span for each transfer
+			transferCtx, transferSpan := otel.Tracer(name).Start(ctx, "stashcp.startDownloadWorker.transfer")
 			transfer.Url.Path = file
 			log.Debugln("Constructed URL:", transfer.Url.String())
-			if downloaded, err = DownloadHTTP(transfer, finalDest, token); err != nil {
+			transferSpan.SetAttributes(
+				attribute.String("url", transfer.Url.String()),
+				attribute.Bool("proxy", transfer.Proxy),
+				attribute.String("source", source),
+				attribute.String("destination", destination),
+				attribute.String("cache", transfer.Cache.Endpoint),
+				attribute.String("cache_resource", transfer.Cache.Resource),
+			)
+			transferSpan.SetAttributes(attribute.String("url", transfer.Url.String()))
+			if downloaded, err = DownloadHTTP(transferCtx, transfer, finalDest, token); err != nil {
 				log.Debugln("Failed to download:", err)
 				toAccum := errors.New("Failed to download from " + transfer.Url.String() +
 					" + proxy=" + strconv.FormatBool(transfer.Proxy) +
 					": " + err.Error())
 				AddError(toAccum)
+				transferSpan.SetStatus(codes.Error, toAccum.Error())
+				transferSpan.RecordError(toAccum)
+				transferSpan.End()
 				continue
 			} else {
 				log.Debugln("Downloaded bytes:", downloaded)
 				success = true
+				transferSpan.SetAttributes(attribute.Int64("downloaded", downloaded))
+				transferSpan.SetStatus(codes.Ok, "Downloaded")
+				transferSpan.End()
 				break
 			}
 
@@ -331,8 +363,9 @@ func startDownloadWorker(source string, destination string, token string, transf
 }
 
 // DownloadHTTP - Perform the actual download of the file
-func DownloadHTTP(transfer TransferDetails, dest string, token string) (int64, error) {
+func DownloadHTTP(traceCtx context.Context, transfer TransferDetails, dest string, token string) (int64, error) {
 
+	span := trace.SpanFromContext(traceCtx)
 	// Create the client, request, and context
 	client := grab.NewClient()
 	transport := http.Transport{
@@ -392,6 +425,8 @@ func DownloadHTTP(transfer TransferDetails, dest string, token string) (int64, e
 	// Check the error real quick
 	if resp.IsComplete() {
 		if err := resp.Err(); err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
 			log.Errorln("Failed to download:", err)
 			return 0, &ConnectionSetupError{Err: err}
 		}
@@ -439,6 +474,7 @@ Loop:
 					continue
 				} else if startBelowLimit == 0 {
 					log.Warnln("Download speed of ", resp.BytesPerSecond(), "bytes/s", " is below the limit of", downloadLimit, "bytes/s")
+					span.AddEvent("slow_download", trace.WithAttributes(attribute.Int64("downloaded", resp.BytesComplete()), attribute.Int64("download_limit", downloadLimit)))
 					startBelowLimit = time.Now().Unix()
 					continue
 				} else if (time.Now().Unix() - startBelowLimit) < 30 {
@@ -446,6 +482,7 @@ Loop:
 					continue
 				}
 				// The download is below the threshold for more than 30 seconds, cancel the download
+				span.AddEvent("Download too slow, cancelling", trace.WithAttributes(attribute.Int64("downloaded", resp.BytesComplete()), attribute.Int64("download_limit", downloadLimit)))
 				cancel()
 				if Options.ProgressBars {
 					var cancelledProgressBar = p.AddBar(0,
@@ -463,7 +500,6 @@ Loop:
 					progressBar.SetTotal(resp.Size, true)
 					cancelledProgressBar.SetTotal(resp.Size, true)
 				}
-
 				return 0, &SlowTransferError{
 					BytesTransferred: resp.BytesComplete(),
 					BytesPerSecond:   int64(resp.BytesPerSecond()),
@@ -548,7 +584,11 @@ func (pr *ProgressReader) Close() error {
 }
 
 // UploadFile Uploads a file using HTTP
-func UploadFile(src string, dest *url.URL, token string, namespace Namespace) (int64, error) {
+func UploadFile(ctx context.Context, src string, dest *url.URL, token string, namespace Namespace) (int64, error) {
+
+	// Create the span
+	_, span := otel.Tracer(name).Start(ctx, "UploadFile")
+	defer span.End()
 
 	log.Debugln("In UploadFile")
 	log.Debugln("Dest", dest.String())

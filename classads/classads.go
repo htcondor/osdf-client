@@ -168,7 +168,7 @@ func attributeSplitFunc(data []byte, atEOF bool) (advance int, token []byte, err
 	for i, curChar := range data {
 		if curChar == '"' && !(i > 0 && data[i-1] == '\\') {
 			insideQuotes = !insideQuotes
-		} else if curChar == ';' && !insideQuotes {
+		} else if (curChar == ';' || curChar == '\n') && !insideQuotes {
 			// Do not return the semi-colon
 			// Trim any spaces
 			return i + 1, bytes.TrimSpace(data[0:i]), nil

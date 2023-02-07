@@ -1,10 +1,11 @@
 package stashcp
 
 import (
+	"context"
 	"errors"
 )
 
-func download_xrootd(sourceFile string, destination string, payload *payloadStruct) (int64, error) {
+func download_xrootd(ctx context.Context, sourceFile string, destination string, payload *payloadStruct) (int64, error) {
 
 	// Download from the nearest cache, if that fails, fallback to the stash origin.
 	return 0, errors.New("XrootD not implemented")
