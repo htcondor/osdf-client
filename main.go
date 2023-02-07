@@ -374,7 +374,7 @@ func DoStashCPSingle(sourceFile string, destination string, methods []string, re
 	success := false
 
 	// If recursive, only do http method to guarantee freshest directory contents
-	if Options.Recursive {
+	if recursive {
 		methods = []string{"http"}
 	}
 

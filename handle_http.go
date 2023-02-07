@@ -312,6 +312,7 @@ func startDownloadWorker(ctx context.Context, source string, destination string,
 		var downloaded int64
 		err := os.MkdirAll(directory, 0700)
 		if err != nil {
+			log.Errorln("Failed to make directory:", directory, err)
 			results <- TransferResults{Error: errors.New("Failed to make directory:" + directory)}
 			continue
 		}
