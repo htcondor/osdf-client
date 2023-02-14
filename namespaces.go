@@ -13,7 +13,6 @@ import (
 	"strings"
 
 	log "github.com/sirupsen/logrus"
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
@@ -160,7 +159,7 @@ func downloadNamespace() ([]byte, error) {
 
 // MatchNamespace matches the namespace passed in to the namespaces in the list
 func MatchNamespace(ctx context.Context, path string) (Namespace, error) {
-	_, span := otel.Tracer(name).Start(ctx, "stashcp.MatchNamespace")
+	_, span := tracer.Start(ctx, "stashcp.MatchNamespace")
 	defer span.End()
 
 	var err error

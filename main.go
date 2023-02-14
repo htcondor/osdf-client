@@ -77,6 +77,9 @@ type payloadStruct struct {
 
 const name = "stashcp"
 
+// Global tracer instance
+var tracer = otel.Tracer(name)
+
 /*
 	Options from stashcache:
 	--parser.add_option('-d', '--debug', dest='debug', action='store_true', help='debug')
@@ -255,7 +258,7 @@ func DoStashCPSingle(sourceFile string, destination string, methods []string, re
 	otel.SetTracerProvider(tp)
 
 	// Add the tracing
-	spanCtx, span := otel.Tracer(name).Start(context.Background(), "stashcp.DoStashCPSingle")
+	spanCtx, span := tracer.Start(context.Background(), "stashcp.DoStashCPSingle")
 	defer span.End()
 
 	// Add the source and destination to the span

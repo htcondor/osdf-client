@@ -24,7 +24,6 @@ import (
 	"github.com/studio-b12/gowebdav"
 	"github.com/vbauerster/mpb/v7"
 	"github.com/vbauerster/mpb/v7/decor"
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
@@ -182,7 +181,7 @@ func download_http(ctx context.Context, source string, destination string, paylo
 		}
 	}()
 
-	spanCtx, span := otel.Tracer(name).Start(ctx, "stashcp.download_http")
+	spanCtx, span := tracer.Start(ctx, "stashcp.download_http")
 	defer span.End()
 
 	// Generate the downloadUrl
@@ -318,7 +317,7 @@ func startDownloadWorker(ctx context.Context, source string, destination string,
 		}
 		for _, transfer := range transfers {
 			// New span for each transfer
-			transferCtx, transferSpan := otel.Tracer(name).Start(ctx, "stashcp.startDownloadWorker.transfer")
+			transferCtx, transferSpan := tracer.Start(ctx, "stashcp.startDownloadWorker.transfer")
 			transfer.Url.Path = file
 			log.Debugln("Constructed URL:", transfer.Url.String())
 			transferSpan.SetAttributes(
@@ -329,7 +328,6 @@ func startDownloadWorker(ctx context.Context, source string, destination string,
 				attribute.String("cache", transfer.Cache.Endpoint),
 				attribute.String("cache_resource", transfer.Cache.Resource),
 			)
-			transferSpan.SetAttributes(attribute.String("url", transfer.Url.String()))
 			if downloaded, err = DownloadHTTP(transferCtx, transfer, finalDest, token); err != nil {
 				log.Debugln("Failed to download:", err)
 				toAccum := errors.New("Failed to download from " + transfer.Url.String() +
@@ -477,6 +475,13 @@ Loop:
 					log.Warnln("Download speed of ", resp.BytesPerSecond(), "bytes/s", " is below the limit of", downloadLimit, "bytes/s")
 					span.AddEvent("slow_download", trace.WithAttributes(attribute.Int64("downloaded", resp.BytesComplete()), attribute.Int64("download_limit", downloadLimit)))
 					startBelowLimit = time.Now().Unix()
+					span.AddEvent("slow_download",
+						trace.WithAttributes(
+							attribute.Int64("downloaded", resp.BytesComplete()),
+							attribute.Int64("download_limit", downloadLimit),
+							attribute.Float64("download_speed", resp.BytesPerSecond()),
+						),
+					)
 					continue
 				} else if (time.Now().Unix() - startBelowLimit) < 30 {
 					// If the download is below the threshold for less than 30 seconds, continue
@@ -510,6 +515,15 @@ Loop:
 
 			} else {
 				// The download is fast enough, reset the startBelowLimit
+				if startBelowLimit != 0 {
+					span.AddEvent("download_speed_ok",
+						trace.WithAttributes(
+							attribute.Int64("downloaded", resp.BytesComplete()),
+							attribute.Int64("download_limit", downloadLimit),
+							attribute.Float64("download_speed", resp.BytesPerSecond()),
+						),
+					)
+				}
 				startBelowLimit = 0
 			}
 
@@ -588,7 +602,14 @@ func (pr *ProgressReader) Close() error {
 func UploadFile(ctx context.Context, src string, dest *url.URL, token string, namespace Namespace) (int64, error) {
 
 	// Create the span
-	_, span := otel.Tracer(name).Start(ctx, "UploadFile")
+	_, span := tracer.Start(ctx, "UploadFile",
+		trace.WithAttributes(
+			attribute.String("src", src),
+			attribute.String("dest", dest.String()),
+			attribute.String("namespace_path", namespace.Path),
+		),
+	)
+
 	defer span.End()
 
 	log.Debugln("In UploadFile")
@@ -597,12 +618,14 @@ func UploadFile(ctx context.Context, src string, dest *url.URL, token string, na
 	file, err := os.Open(src)
 	if err != nil {
 		log.Errorln("Error opening local file:", err)
+		span.SetStatus(codes.Error, "Error opening local file")
 		return 0, err
 	}
 	// Stat the file to get the size (for progress bar)
 	fileInfo, err := file.Stat()
 	if err != nil {
 		log.Errorln("Error stating local file ", src, ":", err)
+		span.SetStatus(codes.Error, "Error stating local file")
 		return 0, err
 	}
 	// Parse the writeback host as a URL
@@ -644,6 +667,9 @@ func UploadFile(ctx context.Context, src string, dest *url.URL, token string, na
 		return 0, err
 	}
 	request.ContentLength = fileInfo.Size()
+	span.SetAttributes(
+		attribute.Int64("file_size", fileInfo.Size()),
+	)
 	// Set the authorization header
 	request.Header.Set("Authorization", "Bearer "+token)
 	var lastKnownWritten int64
@@ -665,9 +691,9 @@ Loop:
 				// We have made progress!
 				lastKnownWritten = currentRead
 			} else {
-				// No progress has been made in the last 1 second
-				log.Errorln("No progress made in last 5 second in upload")
-				lastError = errors.New("upload cancelled, no progress in 5 seconds")
+				// No progress has been made in the last 20 second
+				log.Errorln("No progress made in last 20 second in upload")
+				lastError = errors.New("upload cancelled, no progress in 20 seconds")
 				break Loop
 			}
 
@@ -688,6 +714,10 @@ Loop:
 			break Loop
 
 		}
+	}
+
+	if lastError != nil {
+		span.SetStatus(codes.Error, lastError.Error())
 	}
 
 	if fileInfo.Size() == 0 {
