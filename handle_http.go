@@ -29,6 +29,8 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+var env_prefixes = [...]string{"OSG", "OSDF"}
+
 var p = mpb.New()
 
 // SlowTransferError is an error that is returned when a transfer takes longer than the configured timeout
@@ -51,6 +53,26 @@ func (e *SlowTransferError) Error() string {
 func (e *SlowTransferError) Is(target error) bool {
 	_, ok := target.(*SlowTransferError)
 	return ok
+}
+
+// Determines whether or not we can interact with the site HTTP proxy
+func IsProxyEnabled() bool {
+	for _, prefix := range env_prefixes {
+		if _, isSet := os.LookupEnv(prefix + "_DISABLE_HTTP_PROXY"); isSet {
+			return false
+		}
+	}
+	return true
+}
+
+// Determine whether we are allowed to skip the proxy as a fallback
+func CanDisableProxy() bool {
+	for _, prefix := range env_prefixes {
+		if _, isSet := os.LookupEnv(prefix + "_DISABLE_PROXY_FALLBACK"); isSet {
+			return false
+		}
+	}
+	return true
 }
 
 // ConnectionSetupError is an error that is returned when a connection to the remote server fails
@@ -103,8 +125,6 @@ func NewTransferDetails(cache Cache, https bool) []TransferDetails {
 	} else {
 		cacheEndpoint = cache.Endpoint
 	}
-	_, canDisableProxy := os.LookupEnv("OSG_DISABLE_PROXY_FALLBACK")
-	canDisableProxy = !canDisableProxy
 
 	// Form the URL
 	cacheURL, err := url.Parse(cacheEndpoint)
@@ -144,12 +164,13 @@ func NewTransferDetails(cache Cache, https bool) []TransferDetails {
 		if !HasPort(cacheURL.Host) {
 			cacheURL.Host += ":8000"
 		}
+		isProxyEnabled := IsProxyEnabled()
 		details = append(details, TransferDetails{
 			Url:   *cacheURL,
-			Proxy: true,
+			Proxy: isProxyEnabled,
 			Cache: cache,
 		})
-		if canDisableProxy {
+		if isProxyEnabled && CanDisableProxy() {
 			details = append(details, TransferDetails{
 				Url:   *cacheURL,
 				Proxy: false,
@@ -195,36 +216,14 @@ func download_http(ctx context.Context, source string, destination string, paylo
 		}
 	}
 
-	cacheListName := "xroot"
-	if namespace.ReadHTTPS || namespace.UseTokenOnRead {
-		cacheListName = "xroots"
-	}
-	if len(NearestCacheList) == 0 {
-		_, err := GetBestStashcache(cacheListName)
-		if err != nil {
-			log.Errorln("Failed to get best caches:", err)
-		}
-	}
-
-	log.Debugln("Nearest cache list:", NearestCacheList)
-	log.Debugln("Cache list name:", namespace.Caches)
-
-	// Now that we have the ordered list of caches, do an intersect for the caches for the namespace
-	var closestNamespaceCaches []Cache
-	if CacheOverride {
-		cache := Cache{
-			Endpoint:     NearestCache,
-			AuthEndpoint: NearestCache,
-			Resource:     NearestCache,
-		}
-		closestNamespaceCaches = []Cache{cache}
-	} else {
-		closestNamespaceCaches = namespace.MatchCaches(NearestCacheList)
+	closestNamespaceCaches, err := GetCachesFromNamespace(namespace)
+	if err != nil {
+		log.Errorln("Failed to get namespaced caches (treated as non-fatal):", err)
 	}
 	log.Debugln("Matched caches:", closestNamespaceCaches)
 
 	// Make sure we only try as many caches as we have
-	cachesToTry := 3
+	cachesToTry := CachesToTry
 	if cachesToTry > len(closestNamespaceCaches) {
 		cachesToTry = len(closestNamespaceCaches)
 	}

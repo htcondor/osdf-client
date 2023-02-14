@@ -57,6 +57,9 @@ var NearestCache string
 var NearestCacheList []string
 var CachesJsonLocation string
 
+// Number of caches to attempt to use in any invocation
+var CachesToTry int = 3
+
 // CacheOverride
 var CacheOverride bool
 
@@ -80,26 +83,10 @@ const name = "stashcp"
 // Global tracer instance
 var tracer = otel.Tracer(name)
 
-/*
-	Options from stashcache:
-	--parser.add_option('-d', '--debug', dest='debug', action='store_true', help='debug')
-	parser.add_option('-r', dest='recursive', action='store_true', help='recursively copy')
-	parser.add_option('--closest', action='store_true', help="Return the closest cache and exit")
-	--parser.add_option('-c', '--cache', dest='cache', help="Cache to use")
-	parser.add_option('-j', '--caches-json', dest='caches_json', help="A JSON file containing the list of caches",
-						default=None)
-	parser.add_option('-n', '--cache-list-name', dest='cache_list_name', help="Name of pre-configured cache list to use",
-						default=None)
-	parser.add_option('--list-names', dest='list_names', action='store_true', help="Return the names of pre-configured cache lists and exit (first one is default for -n)")
-	parser.add_option('--methods', dest='methods', help="Comma separated list of methods to try, in order.  Default: cvmfs,xrootd,http", default="cvmfs,xrootd,http")
-	parser.add_option('-t', '--token', dest='token', help="Token file to use for reading and/or writing")
-*/
-
 // Determine the token name if it is embedded in the scheme, Condor-style
 func getTokenName(destination *url.URL) (scheme, tokenName string) {
 	schemePieces := strings.Split(destination.Scheme, "+")
 	tokenName = ""
-	scheme = ""
 	// Scheme is always the last piece
 	scheme = schemePieces[len(schemePieces)-1]
 	// If there are 2 or more pieces, token name is everything but the last item, joined with a +
@@ -216,6 +203,60 @@ func getToken(token_name string) (string, error) {
 		return tokenStr, nil
 	}
 	return tokenParsed.AccessKey, nil
+}
+
+func GetCacheHostnames(testFile string) (urls []string, err error) {
+
+	ns, err := MatchNamespace(testFile)
+	if err != nil {
+		return
+	}
+
+	caches, err := GetCachesFromNamespace(ns)
+	if err != nil {
+		return
+	}
+
+	for _, cache := range caches {
+		url_string := cache.AuthEndpoint
+		host := strings.Split(url_string, ":")[0]
+		urls = append(urls, host)
+	}
+
+	return
+}
+
+func GetCachesFromNamespace(namespace Namespace) (caches []Cache, err error) {
+
+	cacheListName := "xroot"
+	if namespace.ReadHTTPS || namespace.UseTokenOnRead {
+		cacheListName = "xroots"
+	}
+	if len(NearestCacheList) == 0 {
+		_, err = GetBestCache(cacheListName)
+		if err != nil {
+			log.Errorln("Failed to get best caches:", err)
+			return
+		}
+	}
+
+	log.Debugln("Nearest cache list:", NearestCacheList)
+	log.Debugln("Cache list name:", namespace.Caches)
+
+	// The main routine can set a global cache to use
+	if CacheOverride {
+		cache := Cache{
+			Endpoint:     NearestCache,
+			AuthEndpoint: NearestCache,
+			Resource:     NearestCache,
+		}
+		caches = []Cache{cache}
+	} else {
+		caches = namespace.MatchCaches(NearestCacheList)
+	}
+	log.Debugln("Matched caches:", caches)
+
+	return
 }
 
 // Start the transfer, whether read or write back
@@ -397,12 +438,6 @@ Loop:
 				break Loop
 				//check if break still works
 			}
-		case "xrootd":
-			log.Info("Trying XROOTD...")
-			if downloaded, err = download_xrootd(spanCtx, sourceFile, destination, &payload); err == nil {
-				success = true
-				break Loop
-			}
 		case "http":
 			log.Info("Trying HTTP...")
 			if downloaded, err = download_http(spanCtx, sourceFile, destination, &payload, ns, recursive, token_name); err == nil {
@@ -557,31 +592,6 @@ func parse_job_ad(span trace.Span) { // TODO: needs the payload
 	span.SetAttributes(attribute.String("resource_name", resourceName.(string)))
 
 }
-
-// NOT IMPLEMENTED
-// func doStashcpdirectory(sourceDir string, destination string, methods string){
-
-// 	// ?? sourceItems = to_str(subprocess.Popen(["xrdfs", stash_origin, "ls", sourceDir], stdout=subprocess.PIPE).communicate()[0]).split()
-
-// 	// ?? for remote_file in sourceItems:
-
-// 	command2 := "xrdfs " + stash_origin + " stat "+ remote_file + " | grep "IsDir" | wc -l"
-
-// 	//	?? isdir=to_str(subprocess.Popen([command2],stdout=subprocess.PIPE,shell=True).communicate()[0].split()[0])isdir=to_str(subprocess.Popen([command2],stdout=subprocess.PIPE,shell=True).communicate()[0].split()[0])
-
-// 	if isDir != 0 {
-// 		result := doStashcpdirectory(remote, destination /*debug variable??*/)
-// 	} else {
-// 		result := doStashCpSingle(remote_file, destination, methods, debug)
-// 	}
-
-// 	// Stop the transfer if something fails
-// 	if result != 0 {
-// 		return result
-// 	}
-
-// 	return 0
-// }
 
 func es_send(payload *payloadStruct) error {
 
