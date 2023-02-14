@@ -1,6 +1,7 @@
 package stashcp
 
 import (
+	"context"
 	"os"
 	"testing"
 
@@ -68,20 +69,20 @@ func TestMatchNamespace(t *testing.T) {
 	if err != nil {
 		t.Error(err)
 	}
-	ns, err := MatchNamespace("/osgconnect/private/path/to/file.txt")
+	ns, err := MatchNamespace(context.Background(), "/osgconnect/private/path/to/file.txt")
 	assert.NoError(t, err, "Failed to parse namespace")
 
 	assert.Equal(t, "/osgconnect/private", ns.Path)
 	assert.Equal(t, true, ns.ReadHTTPS)
 
 	// Check for empty
-	ns, err = MatchNamespace("/does/not/exist.txt")
+	ns, err = MatchNamespace(context.Background(), "/does/not/exist.txt")
 	assert.NoError(t, err, "Failed to parse namespace")
 	assert.Equal(t, "", ns.Path)
 	assert.Equal(t, Namespace{}.UseTokenOnRead, ns.UseTokenOnRead)
 
 	// Check for not private
-	ns, err = MatchNamespace("/osgconnect/public/path/to/file.txt")
+	ns, err = MatchNamespace(context.Background(), "/osgconnect/public/path/to/file.txt")
 	assert.NoError(t, err, "Failed to parse namespace")
 	assert.Equal(t, "/osgconnect", ns.Path)
 	assert.Equal(t, false, ns.ReadHTTPS)
@@ -130,7 +131,7 @@ func TestMatchNamespaceSpecific(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		ns, err := MatchNamespace(c.path)
+		ns, err := MatchNamespace(context.Background(), c.path)
 		assert.NoError(t, err, "Failed to parse namespace")
 		assert.Equal(t, c.want, ns.Path, "Writeback host does not match when matching namespace for path %s", c.path)
 	}
@@ -138,7 +139,7 @@ func TestMatchNamespaceSpecific(t *testing.T) {
 }
 
 func TestFullNamespace(t *testing.T) {
-	ns, err := MatchNamespace("/ospool/PROTECTED/dweitzel/test.txt")
+	ns, err := MatchNamespace(context.Background(), "/ospool/PROTECTED/dweitzel/test.txt")
 	assert.NoError(t, err, "Failed to parse namespace")
 	assert.Equal(t, true, ns.ReadHTTPS)
 	assert.Equal(t, true, ns.UseTokenOnRead)

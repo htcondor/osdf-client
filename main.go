@@ -207,7 +207,19 @@ func getToken(token_name string) (string, error) {
 
 func GetCacheHostnames(testFile string) (urls []string, err error) {
 
-	ns, err := MatchNamespace(testFile)
+	// Create the tracing profile
+	tp, err := initTrace()
+	defer func() {
+		if err := tp.Shutdown(context.Background()); err != nil {
+			log.Fatal(err)
+		}
+	}()
+
+	// Create the context with the tracing profile
+	ctx, span := tracer.Start(context.Background(), "GetCacheHostnames")
+	defer span.End()
+
+	ns, err := MatchNamespace(ctx, testFile)
 	if err != nil {
 		return
 	}
@@ -275,28 +287,12 @@ func DoStashCPSingle(sourceFile string, destination string, methods []string, re
 		}
 	}()
 
-	exporter, err := otlptrace.New(
-		context.Background(),
-		otlptracehttp.NewClient(otlptracehttp.WithEndpoint("osdf-oltp.nrp-nautilus.io:443")),
-	)
-	if err != nil {
-		log.Errorln("Failed to create the collector exporter: %v", err)
-		return 0, err
-	}
-
-	batcher := sdkTrace.NewBatchSpanProcessor(exporter)
-
-	tp := sdkTrace.NewTracerProvider(
-		sdkTrace.WithSpanProcessor(batcher),
-		sdkTrace.WithResource(newResource()),
-	)
-
+	tp, err := initTrace()
 	defer func() {
 		if err := tp.Shutdown(context.Background()); err != nil {
 			log.Fatal(err)
 		}
 	}()
-	otel.SetTracerProvider(tp)
 
 	// Add the tracing
 	spanCtx, span := tracer.Start(context.Background(), "stashcp.DoStashCPSingle")
@@ -547,9 +543,14 @@ func parse_job_ad(span trace.Span) { // TODO: needs the payload
 	//b, err := os.ReadFile(filename)
 	// Open the file as an io.reader
 	f, err := os.Open(filename)
+	if err != nil {
+		log.Errorf("Unable to open %s: %s", filename, err)
+		return
+	}
 	ads, err := classads.ReadClassAd(f)
 	if err != nil {
-		log.Fatal(err)
+		log.Errorf("Unable to parse %s: %s", filename, err)
+		return
 	}
 
 	// Get the owner
@@ -665,4 +666,37 @@ func newResource() *resource.Resource {
 		),
 	)
 	return r
+}
+
+// Initialize the trace provider
+// You need to shut down the trace provider when the program exits
+// to ensure that all spans are flushed to the collector.
+// Here is some example code:
+// defer func() {
+//		if err := tp.Shutdown(context.Background()); err != nil {
+//			log.Fatal(err)
+//		}
+//	}()
+
+func initTrace() (*sdkTrace.TracerProvider, error) {
+
+	exporter, err := otlptrace.New(
+		context.Background(),
+		otlptracehttp.NewClient(otlptracehttp.WithEndpoint("osdf-oltp.nrp-nautilus.io:443")),
+	)
+	if err != nil {
+		log.Errorf("Failed to create the collector exporter: %v\n", err)
+		return nil, err
+	}
+
+	batcher := sdkTrace.NewBatchSpanProcessor(exporter)
+
+	tp := sdkTrace.NewTracerProvider(
+		sdkTrace.WithSpanProcessor(batcher),
+		sdkTrace.WithResource(newResource()),
+	)
+
+	otel.SetTracerProvider(tp)
+
+	return tp, nil
 }
