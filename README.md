@@ -34,6 +34,13 @@ Run this simple command to download a test file
     $ ./stashcp /osgconnect/public/dweitzel/blast/queries/query1 ./
 
 
+Telementry
+----------
+
+By default, the OSDF client will collect usage information, telementry, from each invocation.  The telementry is uploaded to the OSG where it will be used to identify issues with the OSDF infrastructure and study how users are using the client.
+
+You may disable uploading telementry by setting the environment variable: `OSDF_DISABLE_TELEMENTRY`.
+
 Configuration
 -------------
 `stashcp` is affected by the environment variables:
@@ -44,6 +51,7 @@ Configuration
 | `STASHCP_MINIMUM_DOWNLOAD_SPEED`  | The lower limit a download will be cancelled, in bytes per second                                                                                                                                                                                                   |
 | `STASH_NAMESPACE_URL`             | The URL to download the namespace and cache information.  Default: https://topology.opensciencegrid.org/stashcache/namespaces                                                                                                                                                                                                 |
 
+| `OSDF_DISABLE_TELEMENTRY`         | Disable the uploading of telementry to the OSG |
 
 
 
