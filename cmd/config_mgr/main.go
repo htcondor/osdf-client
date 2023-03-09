@@ -1,14 +1,16 @@
 package main
 
 import (
+	"context"
 	"fmt"
-	"github.com/spf13/cobra"
 	"net/url"
 	"os"
 	"path"
 
-	config "github.com/htcondor/osdf-client/v6/config"
+	"github.com/spf13/cobra"
+
 	stashcp "github.com/htcondor/osdf-client/v6"
+	config "github.com/htcondor/osdf-client/v6/config"
 	log "github.com/sirupsen/logrus"
 	"gopkg.in/yaml.v3"
 )
@@ -125,7 +127,7 @@ func addTokenSubcommands(tokenCmd *cobra.Command) {
 			}
 			dest := url.URL{Path: path.Clean("/" + args[1])}
 
-			namespace, err := stashcp.MatchNamespace(args[1])
+			namespace, err := stashcp.MatchNamespace(context.Background(), args[1])
 			if err != nil {
 				fmt.Fprintln(os.Stderr, "Failed to get namespace for path:", err)
 				os.Exit(1)
@@ -284,9 +286,9 @@ func main() {
 
 	// Define the token commands
 	tokenCmd := &cobra.Command{
-		Use: "token",
+		Use:   "token",
 		Short: "Manage the available tokens",
-		Long: "Manage the available tokens",
+		Long:  "Manage the available tokens",
 	}
 	addTokenSubcommands(tokenCmd)
 
