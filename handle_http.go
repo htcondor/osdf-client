@@ -24,12 +24,11 @@ import (
 	"github.com/studio-b12/gowebdav"
 	"github.com/vbauerster/mpb/v7"
 	"github.com/vbauerster/mpb/v7/decor"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 )
-
-var env_prefixes = [...]string{"OSG", "OSDF"}
 
 var p = mpb.New()
 
@@ -57,22 +56,12 @@ func (e *SlowTransferError) Is(target error) bool {
 
 // Determines whether or not we can interact with the site HTTP proxy
 func IsProxyEnabled() bool {
-	for _, prefix := range env_prefixes {
-		if _, isSet := os.LookupEnv(prefix + "_DISABLE_HTTP_PROXY"); isSet {
-			return false
-		}
-	}
-	return true
+	return !EnvLookupExists("DISABLE_HTTP_PROXY")
 }
 
 // Determine whether we are allowed to skip the proxy as a fallback
 func CanDisableProxy() bool {
-	for _, prefix := range env_prefixes {
-		if _, isSet := os.LookupEnv(prefix + "_DISABLE_PROXY_FALLBACK"); isSet {
-			return false
-		}
-	}
-	return true
+	return !EnvLookupExists("DISABLE_PROXY_FALLBACK")
 }
 
 // ConnectionSetupError is an error that is returned when a connection to the remote server fails
@@ -202,7 +191,7 @@ func download_http(ctx context.Context, source string, destination string, paylo
 		}
 	}()
 
-	spanCtx, span := tracer.Start(ctx, "stashcp.download_http")
+	spanCtx, span := otel.Tracer(name).Start(ctx, "stashcp.download_http")
 	defer span.End()
 
 	// Generate the downloadUrl
@@ -316,7 +305,7 @@ func startDownloadWorker(ctx context.Context, source string, destination string,
 		}
 		for _, transfer := range transfers {
 			// New span for each transfer
-			transferCtx, transferSpan := tracer.Start(ctx, "stashcp.startDownloadWorker.transfer")
+			transferCtx, transferSpan := otel.Tracer(name).Start(ctx, "stashcp.startDownloadWorker.transfer")
 			transfer.Url.Path = file
 			log.Debugln("Constructed URL:", transfer.Url.String())
 			transferSpan.SetAttributes(
@@ -601,7 +590,7 @@ func (pr *ProgressReader) Close() error {
 func UploadFile(ctx context.Context, src string, dest *url.URL, token string, namespace Namespace) (int64, error) {
 
 	// Create the span
-	_, span := tracer.Start(ctx, "UploadFile",
+	_, span := otel.Tracer(name).Start(ctx, "UploadFile",
 		trace.WithAttributes(
 			attribute.String("src", src),
 			attribute.String("dest", dest.String()),

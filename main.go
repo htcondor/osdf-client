@@ -80,9 +80,6 @@ type payloadStruct struct {
 
 const name = "stashcp"
 
-// Global tracer instance
-var tracer = otel.Tracer(name)
-
 // Determine the token name if it is embedded in the scheme, Condor-style
 func getTokenName(destination *url.URL) (scheme, tokenName string) {
 	schemePieces := strings.Split(destination.Scheme, "+")
@@ -216,7 +213,7 @@ func GetCacheHostnames(testFile string) (urls []string, err error) {
 	}()
 
 	// Create the context with the tracing profile
-	ctx, span := tracer.Start(context.Background(), "GetCacheHostnames")
+	ctx, span := otel.Tracer(name).Start(context.Background(), "GetCacheHostnames")
 	defer span.End()
 
 	ns, err := MatchNamespace(ctx, testFile)
@@ -295,7 +292,7 @@ func DoStashCPSingle(sourceFile string, destination string, methods []string, re
 	}()
 
 	// Add the tracing
-	spanCtx, span := tracer.Start(context.Background(), "stashcp.DoStashCPSingle")
+	spanCtx, span := otel.Tracer(name).Start(context.Background(), "stashcp.DoStashCPSingle")
 	defer span.End()
 
 	// Add the source and destination to the span
@@ -524,7 +521,8 @@ func get_ips(name string) []string {
 
 }
 
-func parse_job_ad(span trace.Span) { // TODO: needs the payload
+// Parse the Job Ad for attributes and populate the span attributes
+func parse_job_ad(span *trace.Span) {
 
 	//Parse the .job.ad file for the Owner (username) and ProjectName of the callee.
 
@@ -672,17 +670,28 @@ func newResource() *resource.Resource {
 // You need to shut down the trace provider when the program exits
 // to ensure that all spans are flushed to the collector.
 // Here is some example code:
-// defer func() {
-//		if err := tp.Shutdown(context.Background()); err != nil {
-//			log.Fatal(err)
-//		}
-//	}()
+//
+//	defer func() {
+//			if err := tp.Shutdown(context.Background()); err != nil {
+//				log.Fatal(err)
+//			}
+//		}()
+func initTrace() (trace.TracerProvider, error) {
 
-func initTrace() (*sdkTrace.TracerProvider, error) {
+	var tp trace.TracerProvider
+	// Check if the telementry is disabled
+	if EnvLookupExists("DISABLE_TELEMENTRY") {
+		log.Debugln("Telemetry is disabled")
+		tp = trace.NewNoopTracerProvider()
+		otel.SetTracerProvider(tp)
+		return tp, nil
+	}
+
+	// Telementry is not disabled, set it up
 
 	exporter, err := otlptrace.New(
 		context.Background(),
-		otlptracehttp.NewClient(otlptracehttp.WithEndpoint("osdf-oltp.nrp-nautilus.io:443")),
+		otlptracehttp.NewClient(otlptracehttp.WithEndpoint("osdf-otlp.osg-htc.org:443")),
 	)
 	if err != nil {
 		log.Errorf("Failed to create the collector exporter: %v\n", err)
@@ -691,7 +700,7 @@ func initTrace() (*sdkTrace.TracerProvider, error) {
 
 	batcher := sdkTrace.NewBatchSpanProcessor(exporter)
 
-	tp := sdkTrace.NewTracerProvider(
+	tp = sdkTrace.NewTracerProvider(
 		sdkTrace.WithSpanProcessor(batcher),
 		sdkTrace.WithResource(newResource()),
 	)

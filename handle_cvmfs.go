@@ -8,6 +8,7 @@ import (
 	"path"
 
 	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 )
@@ -16,7 +17,7 @@ func download_cvmfs(ctx context.Context, sourceFile string, destination string, 
 	//Check if file is available in cvfms
 
 	// Set the span name
-	_, span := tracer.Start(ctx, "stashcp.download_cvmfs")
+	_, span := otel.Tracer(name).Start(ctx, "stashcp.download_cvmfs")
 	defer span.End()
 
 	var cvmfs_file string = path.Join("/cvmfs/stash.osgstorage.org", sourceFile)
