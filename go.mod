@@ -4,6 +4,7 @@ go 1.16
 
 require (
 	github.com/cavaliercoder/grab v2.0.0+incompatible
+	github.com/golang-jwt/jwt v3.2.2+incompatible
 	github.com/jessevdk/go-flags v1.5.0
 	github.com/jsipprell/keyctl v1.0.4-0.20211208153515-36ca02672b6c
 	github.com/kr/pretty v0.3.0 // indirect
@@ -20,6 +21,8 @@ require (
 	go.opentelemetry.io/otel/sdk v1.12.0
 	go.opentelemetry.io/otel/trace v1.12.0
 	golang.org/x/crypto v0.0.0-20221010152910-d6f0a8c073c2
+	golang.org/x/net v0.4.0
+	golang.org/x/oauth2 v0.2.0
 	golang.org/x/term v0.3.0
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 	gopkg.in/yaml.v3 v3.0.1

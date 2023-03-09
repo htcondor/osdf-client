@@ -1,14 +1,11 @@
 package stashcp
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
-	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -96,9 +93,7 @@ func getTokenName(destination *url.URL) (scheme, tokenName string) {
 // Do writeback to stash using SciTokens
 func doWriteBack(ctx context.Context, source string, destination *url.URL, namespace Namespace) (int64, error) {
 
-	// Get the token name from the scheme
-	_, tokenName := getTokenName(destination)
-	scitoken_contents, err := getToken(tokenName)
+	scitoken_contents, err := getToken(destination, namespace, true)
 	if err != nil {
 		return 0, err
 	}
@@ -106,7 +101,8 @@ func doWriteBack(ctx context.Context, source string, destination *url.URL, names
 
 }
 
-func getToken(token_name string) (string, error) {
+func getToken(destination *url.URL, namespace Namespace, isWrite bool) (string, error) {
+	_, token_name := getTokenName(destination)
 
 	type tokenJson struct {
 		AccessKey string `json:"access_token"`
@@ -178,10 +174,15 @@ func getToken(token_name string) (string, error) {
 			token_location, _ = filepath.Abs(".condor_creds/" + token_filename)
 		}
 		if token_location == "" {
-			// Print out, can't find token!  Print out error and exit with non-zero exit status
-			// TODO: Better error message
-			log.Errorln("Unable to find token file")
-			return "", errors.New("failed to find token...")
+			value, err := AcquireToken(destination, namespace, isWrite)
+			if err == nil {
+				return value, nil
+			}
+			log.Errorln("Failed to generate a new authorization token for this transfer: ", err)
+			log.Errorln("This transfer requires authorization to complete and no token is available")
+			err = errors.New("failed to find or generate a token as required for " + destination.String())
+			AddError(err)
+			return "", err
 		}
 	}
 
@@ -206,11 +207,7 @@ func GetCacheHostnames(testFile string) (urls []string, err error) {
 
 	// Create the tracing profile
 	tp, err := initTrace()
-	defer func() {
-		if err := tp.Shutdown(context.Background()); err != nil {
-			log.Fatal(err)
-		}
-	}()
+	defer ShutDownTrace(tp)
 
 	// Create the context with the tracing profile
 	ctx, span := otel.Tracer(name).Start(context.Background(), "GetCacheHostnames")
@@ -285,11 +282,7 @@ func DoStashCPSingle(sourceFile string, destination string, methods []string, re
 	}()
 
 	tp, err := initTrace()
-	defer func() {
-		if err := tp.Shutdown(context.Background()); err != nil {
-			log.Fatal(err)
-		}
-	}()
+	defer ShutDownTrace(tp)
 
 	// Add the tracing
 	spanCtx, span := otel.Tracer(name).Start(context.Background(), "stashcp.DoStashCPSingle")
@@ -403,7 +396,7 @@ func DoStashCPSingle(sourceFile string, destination string, methods []string, re
 
 	// ??
 
-	parse_job_ad(span)
+	parse_job_ad(&span)
 
 	payload.start1 = time.Now().Unix()
 
@@ -425,11 +418,15 @@ Loop:
 
 		switch method {
 		case "cvmfs":
-			log.Info("Trying CVMFS...")
-			if downloaded, err = download_cvmfs(spanCtx, sourceFile, destination, &payload); err == nil {
-				success = true
-				break Loop
-				//check if break still works
+			if strings.HasPrefix(sourceFile, "/osgconnect/") {
+				log.Info("Trying CVMFS...")
+				if downloaded, err = download_cvmfs(spanCtx, sourceFile, destination, &payload); err == nil {
+					success = true
+					break Loop
+					//check if break still works
+				}
+			} else {
+				log.Debug("Skipping CVMFS as file does not start with /osgconnect/")
 			}
 		case "http":
 			log.Info("Trying HTTP...")
@@ -456,12 +453,6 @@ Loop:
 	} else {
 		log.Error("All methods failed! Unable to download file.")
 		payload.status = "Fail"
-	}
-
-	// We really don't care if the es send fails, but log
-	// it in debug if it does fail
-	if err := es_send(&payload); err != nil {
-		log.Debugln("Failed to send to data to ES")
 	}
 
 	if !success {
@@ -556,101 +547,40 @@ func parse_job_ad(span *trace.Span) {
 	if err != nil {
 		log.Debugln(err)
 	}
-	span.SetAttributes(attribute.String("owner", owner.(string)))
+	(*span).SetAttributes(attribute.String("owner", owner.(string)))
 
 	// Get the Project
 	project, err := ads[0].Get("ProjectName")
 	if err != nil {
 		log.Debugln(err)
 	}
-	span.SetAttributes(attribute.String("project", project.(string)))
+	(*span).SetAttributes(attribute.String("project", project.(string)))
 
 	// Get the ClusterId
 	clusterId, err := ads[0].Get("ClusterId")
 	if err != nil {
 		log.Debugln(err)
 	}
-	span.SetAttributes(attribute.Int("cluster_id", clusterId.(int)))
+	(*span).SetAttributes(attribute.Int("cluster_id", clusterId.(int)))
 
 	// Get the ProcId
 	procId, err := ads[0].Get("ProcId")
 	if err != nil {
 		log.Debugln(err)
 	}
-	span.SetAttributes(attribute.Int("proc_id", procId.(int)))
+	(*span).SetAttributes(attribute.Int("proc_id", procId.(int)))
 
 	// Create the jobid from the cluster and proc id
 	jobId := fmt.Sprintf("%d.%d", clusterId, procId)
-	span.SetAttributes(attribute.String("job_id", jobId))
+	(*span).SetAttributes(attribute.String("job_id", jobId))
 
 	// Get the ResourceName from JOBGLIDEIN_ResourceName
 	resourceName, err := ads[0].Get("JOBGLIDEIN_ResourceName")
 	if err != nil {
 		log.Debugln(err)
 	}
-	span.SetAttributes(attribute.String("resource_name", resourceName.(string)))
+	(*span).SetAttributes(attribute.String("resource_name", resourceName.(string)))
 
-}
-
-func es_send(payload *payloadStruct) error {
-
-	// calculate the current timestamp
-	timeStamp := time.Now().Unix()
-	payload.timestamp = timeStamp
-
-	// convert payload to a JSON string (something with Marshall ...)
-	var jsonBytes []byte
-	var err error
-	if jsonBytes, err = json.Marshal(payload); err != nil {
-		log.Errorln("Failed to marshal payload JSON: ", err)
-		return err
-	}
-
-	errorChan := make(chan error)
-
-	// Need to make a closure in order to handle the error
-	go func() {
-		err := doEsSend(jsonBytes, errorChan)
-		if err != nil {
-			return
-		}
-	}()
-
-	select {
-	case returnedError := <-errorChan:
-		return returnedError
-	case <-time.After(5 * time.Second):
-		log.Debugln("Send to ES timed out")
-		return errors.New("ES send timed out")
-	}
-
-}
-
-// Do the actual send to ES
-// Should be called with a timeout
-func doEsSend(jsonBytes []byte, errorChannel chan<- error) error {
-	// Send a HTTP POST to collector.atlas-ml.org, with a timeout!
-	resp, err := http.Post("http://collector.atlas-ml.org:9951", "application/json", bytes.NewBuffer(jsonBytes))
-
-	if err != nil {
-		log.Errorln("Can't get collector.atlas-ml.org:", err)
-		errorChannel <- err
-		return err
-	}
-	defer func(Body io.ReadCloser) {
-		err := Body.Close()
-		if err != nil {
-			log.Errorln("Failed to close body when uploading payload")
-		}
-	}(resp.Body)
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		errorChannel <- err
-		return err
-	}
-	log.Debugln("Returned from collector.atlas-ml.org:", string(body))
-	errorChannel <- nil
-	return nil
 }
 
 // newResource returns a resource describing this application.
@@ -671,11 +601,7 @@ func newResource() *resource.Resource {
 // to ensure that all spans are flushed to the collector.
 // Here is some example code:
 //
-//	defer func() {
-//			if err := tp.Shutdown(context.Background()); err != nil {
-//				log.Fatal(err)
-//			}
-//		}()
+//	defer ShutdownTraceProvider(tp)
 func initTrace() (trace.TracerProvider, error) {
 
 	var tp trace.TracerProvider
@@ -708,4 +634,13 @@ func initTrace() (trace.TracerProvider, error) {
 	otel.SetTracerProvider(tp)
 
 	return tp, nil
+}
+
+// Shutdown trace provider
+func ShutDownTrace(tp trace.TracerProvider) {
+	if prv, ok := tp.(*sdkTrace.TracerProvider); ok {
+		if err := prv.Shutdown(context.Background()); err != nil {
+			log.Fatal(err)
+		}
+	}
 }

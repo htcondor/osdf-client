@@ -54,8 +54,24 @@ func (e *SlowTransferError) Is(target error) bool {
 	return ok
 }
 
+type FileDownloadError struct {
+	Text string
+	Err  error
+}
+
+func (e FileDownloadError) Error() string {
+	return e.Text
+}
+
+func (e FileDownloadError) Unwrap() error {
+	return e.Err
+}
+
 // Determines whether or not we can interact with the site HTTP proxy
 func IsProxyEnabled() bool {
+	if _, isSet := os.LookupEnv("http_proxy"); !isSet {
+		return false
+	}
 	return !EnvLookupExists("DISABLE_HTTP_PROXY")
 }
 
@@ -72,7 +88,11 @@ type ConnectionSetupError struct {
 
 func (e *ConnectionSetupError) Error() string {
 	if e.Err != nil {
-		return "failed setup connection to " + e.URL + ": " + e.Err.Error()
+		if len(e.URL) > 0 {
+			return "failed connection setup to " + e.URL + ": " + e.Err.Error()
+		} else {
+			return "failed connection setup: " + e.Err.Error()
+		}
 	} else {
 		return "Connection to remote server failed"
 	}
@@ -198,7 +218,8 @@ func download_http(ctx context.Context, source string, destination string, paylo
 	var token string
 	if namespace.UseTokenOnRead {
 		var err error
-		token, err = getToken(tokenName)
+		sourceUrl := url.URL{Path: source}
+		token, err = getToken(&sourceUrl, namespace, false)
 		if err != nil {
 			log.Errorln("Failed to get token though required to read from this namespace:", err)
 			return 0, err
@@ -318,12 +339,32 @@ func startDownloadWorker(ctx context.Context, source string, destination string,
 			)
 			if downloaded, err = DownloadHTTP(transferCtx, transfer, finalDest, token); err != nil {
 				log.Debugln("Failed to download:", err)
-				toAccum := errors.New("Failed to download from " + transfer.Url.String() +
-					" + proxy=" + strconv.FormatBool(transfer.Proxy) +
-					": " + err.Error())
-				AddError(toAccum)
-				transferSpan.SetStatus(codes.Error, toAccum.Error())
-				transferSpan.RecordError(toAccum)
+				var ope *net.OpError
+				var cse *ConnectionSetupError
+				errorString := "Failed to download from " + transfer.Url.Hostname() + ":" +
+					transfer.Url.Port() + " "
+				if errors.As(err, &ope) && ope.Op == "proxyconnect" {
+					log.Debugln(ope)
+					AddrString, _ := os.LookupEnv("http_proxy")
+					if ope.Addr != nil {
+						AddrString = " " + ope.Addr.String()
+					}
+					errorString += "due to proxy " + AddrString + " error: " + ope.Unwrap().Error()
+				} else if errors.As(err, &cse) {
+					errorString += "+ proxy=" + strconv.FormatBool(transfer.Proxy) + ": "
+					if sce, ok := cse.Unwrap().(grab.StatusCodeError); ok {
+						errorString += sce.Error()
+					} else {
+						errorString += err.Error()
+					}
+				} else {
+					errorString += "+ proxy=" + strconv.FormatBool(transfer.Proxy) +
+						": " + err.Error()
+				}
+				fileDownloadError := FileDownloadError{errorString, err}
+				AddError(fileDownloadError)
+				transferSpan.SetStatus(codes.Error, fileDownloadError.Error())
+				transferSpan.RecordError(fileDownloadError)
 				transferSpan.End()
 				continue
 			} else {
@@ -554,7 +595,9 @@ Loop:
 		log.Debugln("Got error from HTTP download", err)
 		return 0, err
 	}
-	if resp.HTTPResponse.StatusCode != 200 {
+	// Valid responses include 200 and 206.  The latter occurs if the download was resumed after a
+	// prior attempt.
+	if resp.HTTPResponse.StatusCode != 200 && resp.HTTPResponse.StatusCode != 206 {
 		log.Debugln("Got failure status code:", resp.HTTPResponse.StatusCode)
 		return 0, errors.New("failure status code")
 	}
