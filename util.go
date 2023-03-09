@@ -31,10 +31,10 @@ var env_prefixes = [...]string{"OSG", "OSDF"}
 func EnvLookupExists(name string) bool {
 	for _, prefix := range env_prefixes {
 		if _, isSet := os.LookupEnv(prefix + "_" + name); isSet {
-			return false
+			return true
 		}
 	}
-	return true
+	return false
 }
 
 // LookupBool returns true if the environment variable is set to "true"
