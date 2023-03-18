@@ -29,11 +29,23 @@ func TokenIsAcceptable(jwtSerialized string, osdfPath string, namespace Namespac
 		return false
 	}
 
+	// Ensure the OSDF path is prefixed with this namespace path
 	osdfPathCleaned := path.Clean(osdfPath)
 	if !strings.HasPrefix(osdfPathCleaned, namespace.Path) {
 		return false
 	}
+
+	// Some issuer's token base path is distinct from the OSDF base path.
+	// Example:
+	// - Issuer base path: `/chtc`
+	// - Namespace path: `/chtc/PROTECTED`
+	// In this case, we want to strip out the issuer base path, not the
+	// namespace one, in order to see if the token has the right privs.
+
 	targetResource := path.Clean("/" + osdfPathCleaned[len(namespace.Path):])
+	if len(namespace.IssuerBasePath) > 0 {
+		targetResource = path.Clean("/" + osdfPathCleaned[len(namespace.IssuerBasePath):])
+	}
 
 	scopes_iface := (*token.Claims.(*jwt.MapClaims))["scope"]
 	if scopes, ok := scopes_iface.(string); ok {
