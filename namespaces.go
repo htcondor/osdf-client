@@ -2,15 +2,21 @@ package stashcp
 
 import (
 	"bytes"
+	"context"
 	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
-	log "github.com/sirupsen/logrus"
 	"io"
 	"net/http"
 	"os"
 	"strings"
+
+	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 // I don't think we actually want stashcp to download the namespace every build
@@ -160,19 +166,27 @@ func downloadNamespace() ([]byte, error) {
 }
 
 // MatchNamespace matches the namespace passed in to the namespaces in the list
-func MatchNamespace(path string) (Namespace, error) {
+func MatchNamespace(ctx context.Context, path string) (Namespace, error) {
+	_, span := otel.Tracer(name).Start(ctx, "stashcp.MatchNamespace")
+	defer span.End()
+
 	var err error
 	if namespaces == nil {
 		namespaces, err = GetNamespaces()
 		if err != nil {
+			span.SetStatus(codes.Error, err.Error())
+			span.RecordError(err)
 			return Namespace{}, err
 		}
 	}
+	span.AddEvent("GotNamespaces", trace.WithAttributes(
+		attribute.Int("namespaces", len(namespaces))))
 	var best Namespace
 	for _, namespace := range namespaces {
 		if strings.HasPrefix(path, namespace.Path) && len(namespace.Path) > len(best.Path) {
 			best = namespace
 		}
 	}
+	span.SetAttributes(attribute.String("best", best.Path))
 	return best, nil
 }

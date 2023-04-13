@@ -136,3 +136,21 @@ func TestAttributeSplitFunc(t *testing.T) {
 	assert.Equal(t, `Url = "stash:///osgconnect/public/$USER/file1; stash:///osgconnect/public/$USER/file2"`, attributes[1])
 
 }
+
+func TestJobAd(t *testing.T) {
+	input := `AccountingGroup = "group_opportunistic.OSG-Staff.dweitzel"
+	AcctGroup = "OSG-Staff"
+	AcctGroupUser = "dweitzel"
+	AllowedExecuteDuration = 72000
+	Arguments = ""
+	AutoClusterAttrs = "DESIRED_Sites,DiskUsage,DynamicSlot,FirstUpdateUptimeGPUsSeconds,HAS_CVMFS_connect_opensciencegrid_org,HAS_CVMFS_oasis_opensciencegrid_org,Has_MPI,HasJava,ITB_Factory,ITB_Sites,JobDurationCategory,JobUniverse,LastHeardFrom,LastUpdateUptimeGPUsSeconds,MachineLastMatchTime,MemoryUsage,OSG_NODE_VALIDATED,PartitionableSlot,ProjectName,Rank,RecentJobDurationAvg,RecentJobDurationCount,RemoteOwner,RequestCpus,RequestDisk,RequestGPUs,RequestK8SNamespace,RequestMemory,SINGULARITY_DISK_IS_FULL,SingularityImage,Slot1_SelfMonitorAge,Slot1_TotalTimeClaimedBusy,Slot1_TotalTimeUnclaimedIdle,StartOfJobUptimeGPUsSeconds,STASHCP_VERIFIED,TotalJobRuntime,undeined,UNDESIRED_Sites,UptimeGPUsSeconds,Want_MPI,XENON_DESIRED_Sites,ConcurrencyLimits,FlockTo,Requirements,IDTOKEN,FromJupyterLab,Owner,Memory,HasExcessiveLoad,IsBlackHole,HAS_MODULES,SINGULARITY_CAN_USE_SIF,FileSystemDomain"
+	AutoClusterId = 1772
+	ClusterId = 35063371
+	Cmd = "condor_exec.exe"`
+	ad, err := ReadClassAd(strings.NewReader(input))
+	assert.NoError(t, err, "ParseClassAd() failed")
+	assert.Equal(t, 1, len(ad), "ParseClassAd() returned %d ads, expected 1", len(ad))
+	accountGroup, err := ad[0].Get("AccountingGroup")
+	assert.NoError(t, err, "Get(AccountingGroup) failed")
+	assert.Equal(t, "group_opportunistic.OSG-Staff.dweitzel", accountGroup.(string))
+}

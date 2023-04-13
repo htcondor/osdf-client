@@ -1,12 +1,12 @@
 package stashcp
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -21,7 +21,17 @@ import (
 	// "encoding/hex"
 	// "strings"
 
+	"github.com/htcondor/osdf-client/v6/classads"
 	log "github.com/sirupsen/logrus"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdkTrace "go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.17.0"
+	"go.opentelemetry.io/otel/trace"
 )
 
 type OptionsStruct struct {
@@ -65,6 +75,8 @@ type payloadStruct struct {
 	downloadSize int64
 }
 
+const name = "stashcp"
+
 // Determine the token name if it is embedded in the scheme, Condor-style
 func getTokenName(destination *url.URL) (scheme, tokenName string) {
 	schemePieces := strings.Split(destination.Scheme, "+")
@@ -79,13 +91,13 @@ func getTokenName(destination *url.URL) (scheme, tokenName string) {
 }
 
 // Do writeback to stash using SciTokens
-func doWriteBack(source string, destination *url.URL, namespace Namespace) (int64, error) {
+func doWriteBack(ctx context.Context, source string, destination *url.URL, namespace Namespace) (int64, error) {
 
 	scitoken_contents, err := getToken(destination, namespace, true)
 	if err != nil {
 		return 0, err
 	}
-	return UploadFile(source, destination, scitoken_contents, namespace)
+	return UploadFile(ctx, source, destination, scitoken_contents, namespace)
 
 }
 
@@ -193,7 +205,15 @@ func getToken(destination *url.URL, namespace Namespace, isWrite bool) (string, 
 
 func GetCacheHostnames(testFile string) (urls []string, err error) {
 
-	ns, err := MatchNamespace(testFile)
+	// Create the tracing profile
+	tp, err := initTrace()
+	defer ShutDownTrace(tp)
+
+	// Create the context with the tracing profile
+	ctx, span := otel.Tracer(name).Start(context.Background(), "GetCacheHostnames")
+	defer span.End()
+
+	ns, err := MatchNamespace(ctx, testFile)
 	if err != nil {
 		return
 	}
@@ -261,6 +281,21 @@ func DoStashCPSingle(sourceFile string, destination string, methods []string, re
 		}
 	}()
 
+	tp, err := initTrace()
+	defer ShutDownTrace(tp)
+
+	// Add the tracing
+	spanCtx, span := otel.Tracer(name).Start(context.Background(), "stashcp.DoStashCPSingle")
+	defer span.End()
+
+	// Add the source and destination to the span
+	span.SetAttributes(
+		attribute.String("source", sourceFile),
+		attribute.String("destination", destination),
+		attribute.StringSlice("methods", methods),
+		attribute.Bool("recursive", recursive),
+	)
+
 	// Parse the source and destination with URL parse
 
 	source_url, err := url.Parse(sourceFile)
@@ -286,6 +321,10 @@ func DoStashCPSingle(sourceFile string, destination string, methods []string, re
 
 	sourceScheme, _ := getTokenName(source_url)
 	destScheme, _ := getTokenName(dest_url)
+	span.SetAttributes(
+		attribute.String("sourceScheme", sourceScheme),
+		attribute.String("destScheme", destScheme),
+	)
 
 	understoodSchemes := []string{"stash", "file", "osdf", ""}
 
@@ -307,11 +346,11 @@ func DoStashCPSingle(sourceFile string, destination string, methods []string, re
 
 	if destScheme == "stash" || destScheme == "osdf" {
 		log.Debugln("Detected writeback")
-		ns, err := MatchNamespace(dest_url.Path)
+		ns, err := MatchNamespace(spanCtx, dest_url.Path)
 		if err != nil {
 			log.Errorln("Failed to get namespace information:", err)
 		}
-		return doWriteBack(source_url.Path, dest_url, ns)
+		return doWriteBack(spanCtx, source_url.Path, dest_url, ns)
 	}
 
 	if dest_url.Scheme == "file" {
@@ -326,7 +365,7 @@ func DoStashCPSingle(sourceFile string, destination string, methods []string, re
 		sourceFile = "/" + sourceFile
 	}
 
-	ns, err := MatchNamespace(source_url.Path)
+	ns, err := MatchNamespace(spanCtx, source_url.Path)
 	if err != nil {
 		return 0, err
 	}
@@ -350,13 +389,14 @@ func DoStashCPSingle(sourceFile string, destination string, methods []string, re
 	if !found {
 		payload.sitename = "siteNotFound"
 	}
+	span.SetAttributes(attribute.String("site", payload.sitename))
 
 	//Fill out the payload as much as possible
 	payload.filename = source_url.Path
 
 	// ??
 
-	parse_job_ad(payload)
+	parse_job_ad(&span)
 
 	payload.start1 = time.Now().Unix()
 
@@ -364,11 +404,12 @@ func DoStashCPSingle(sourceFile string, destination string, methods []string, re
 	success := false
 
 	// If recursive, only do http method to guarantee freshest directory contents
-	if Options.Recursive {
+	if recursive {
 		methods = []string{"http"}
 	}
 
 	_, token_name := getTokenName(source_url)
+	span.SetAttributes(attribute.String("token_name", token_name))
 
 	// switch statement?
 	var downloaded int64 = 0
@@ -379,7 +420,7 @@ Loop:
 		case "cvmfs":
 			if strings.HasPrefix(sourceFile, "/osgconnect/") {
 				log.Info("Trying CVMFS...")
-				if downloaded, err = download_cvmfs(sourceFile, destination, &payload); err == nil {
+				if downloaded, err = download_cvmfs(spanCtx, sourceFile, destination, &payload); err == nil {
 					success = true
 					break Loop
 					//check if break still works
@@ -389,7 +430,7 @@ Loop:
 			}
 		case "http":
 			log.Info("Trying HTTP...")
-			if downloaded, err = download_http(sourceFile, destination, &payload, ns, recursive, token_name); err == nil {
+			if downloaded, err = download_http(spanCtx, sourceFile, destination, &payload, ns, recursive, token_name); err == nil {
 				success = true
 				break Loop
 			}
@@ -415,8 +456,10 @@ Loop:
 	}
 
 	if !success {
+		span.SetStatus(codes.Error, "Failed to download file")
 		return downloaded, errors.New("failed to download file")
 	} else {
+		span.SetStatus(codes.Ok, "Downloaded file")
 		return downloaded, nil
 	}
 
@@ -469,7 +512,8 @@ func get_ips(name string) []string {
 
 }
 
-func parse_job_ad(payload payloadStruct) { // TODO: needs the payload
+// Parse the Job Ad for attributes and populate the span attributes
+func parse_job_ad(span *trace.Span) {
 
 	//Parse the .job.ad file for the Owner (username) and ProjectName of the callee.
 
@@ -485,25 +529,118 @@ func parse_job_ad(payload payloadStruct) { // TODO: needs the payload
 
 	// https://stackoverflow.com/questions/28574609/how-to-apply-regexp-to-content-in-file-go
 
-	b, err := os.ReadFile(filename)
+	//b, err := os.ReadFile(filename)
+	// Open the file as an io.reader
+	f, err := os.Open(filename)
 	if err != nil {
-		log.Fatal(err)
+		log.Errorf("Unable to open %s: %s", filename, err)
+		return
+	}
+	ads, err := classads.ReadClassAd(f)
+	if err != nil {
+		log.Errorf("Unable to parse %s: %s", filename, err)
+		return
 	}
 
-	// Get all matches from file
-	classadRegex, e := regexp.Compile(`^\s*(Owner|ProjectName)\s=\s"(.*)"`)
-	if e != nil {
-		log.Fatal(e)
+	// Get the owner
+	owner, err := ads[0].Get("Owner")
+	if err != nil {
+		log.Debugln(err)
+	}
+	(*span).SetAttributes(attribute.String("owner", owner.(string)))
+
+	// Get the Project
+	project, err := ads[0].Get("ProjectName")
+	if err != nil {
+		log.Debugln(err)
+	}
+	(*span).SetAttributes(attribute.String("project", project.(string)))
+
+	// Get the ClusterId
+	clusterId, err := ads[0].Get("ClusterId")
+	if err != nil {
+		log.Debugln(err)
+	}
+	(*span).SetAttributes(attribute.Int("cluster_id", clusterId.(int)))
+
+	// Get the ProcId
+	procId, err := ads[0].Get("ProcId")
+	if err != nil {
+		log.Debugln(err)
+	}
+	(*span).SetAttributes(attribute.Int("proc_id", procId.(int)))
+
+	// Create the jobid from the cluster and proc id
+	jobId := fmt.Sprintf("%d.%d", clusterId, procId)
+	(*span).SetAttributes(attribute.String("job_id", jobId))
+
+	// Get the ResourceName from JOBGLIDEIN_ResourceName
+	resourceName, err := ads[0].Get("JOBGLIDEIN_ResourceName")
+	if err != nil {
+		log.Debugln(err)
+	}
+	(*span).SetAttributes(attribute.String("resource_name", resourceName.(string)))
+
+}
+
+// newResource returns a resource describing this application.
+func newResource() *resource.Resource {
+	r, _ := resource.Merge(
+		resource.Default(),
+		resource.NewWithAttributes(
+			semconv.SchemaURL,
+			semconv.ServiceNameKey.String(name),
+			semconv.ServiceVersionKey.String(version),
+		),
+	)
+	return r
+}
+
+// Initialize the trace provider
+// You need to shut down the trace provider when the program exits
+// to ensure that all spans are flushed to the collector.
+// Here is some example code:
+//
+//	defer ShutdownTraceProvider(tp)
+func initTrace() (trace.TracerProvider, error) {
+
+	var tp trace.TracerProvider
+	// Check if the telementry is disabled
+	if EnvLookupExists("DISABLE_TELEMENTRY") {
+		log.Debugln("Telemetry is disabled")
+		tp = trace.NewNoopTracerProvider()
+		otel.SetTracerProvider(tp)
+		return tp, nil
 	}
 
-	matches := classadRegex.FindAll(b, -1)
+	// Telementry is not disabled, set it up
 
-	for _, match := range matches {
-		if string(match[0]) == "Owner" {
-			payload.Owner = string(match[1])
-		} else if string(match) == "ProjectName" {
-			payload.ProjectName = string(match[1])
+	exporter, err := otlptrace.New(
+		context.Background(),
+		otlptracehttp.NewClient(otlptracehttp.WithEndpoint("osdf-otlp.osg-htc.org:443")),
+	)
+	if err != nil {
+		log.Errorf("Failed to create the collector exporter: %v\n", err)
+		return nil, err
+	}
+
+	batcher := sdkTrace.NewBatchSpanProcessor(exporter)
+
+	tp = sdkTrace.NewTracerProvider(
+		sdkTrace.WithSpanProcessor(batcher),
+		sdkTrace.WithResource(newResource()),
+	)
+
+	otel.SetTracerProvider(tp)
+
+	return tp, nil
+}
+
+// Shutdown trace provider
+func ShutDownTrace(tp trace.TracerProvider) {
+	if prv, ok := tp.(*sdkTrace.TracerProvider); ok {
+		if err := prv.Shutdown(context.Background()); err != nil {
+			log.Debugln("While shuttding down traces, an error occured: ", err)
 		}
 	}
-
 }

@@ -64,6 +64,9 @@ type Options struct {
 	// Progress bars
 	ProgessBars bool `long:"progress" short:"p" description:"Show progress bars, turned on if run from a terminal"`
 
+	// Do not show progress bars
+	NoProgressBars bool `long:"no-progress" description:"Do not show progress bars, default: turned on if run from a terminal"`
+
 	// PluginInterface specifies how the output should be formatted
 	PluginInterface bool `long:"plugininterface" description:"Output in HTCondor plugin format.  Turned on if executable is named stash_plugin"`
 
@@ -78,7 +81,7 @@ var parser = flags.NewParser(&options, flags.Default)
 func main() {
 
 	stashcp.Options.Version = version
-	
+
 	// Capture the start time of the transfer
 	if _, err := parser.Parse(); err != nil {
 		if flagsErr, ok := err.(*flags.Error); ok && flagsErr.Type == flags.ErrHelp {
@@ -120,6 +123,11 @@ func main() {
 	if fileInfo, _ := os.Stdout.Stat(); (fileInfo.Mode() & os.ModeCharDevice) != 0 {
 		stashcp.Options.ProgressBars = true
 	} else {
+		stashcp.Options.ProgressBars = false
+	}
+
+	// Finally, if no progress bars is selected, that overrides everything
+	if options.NoProgressBars {
 		stashcp.Options.ProgressBars = false
 	}
 

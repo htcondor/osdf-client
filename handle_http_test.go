@@ -2,6 +2,7 @@ package stashcp
 
 import (
 	"bytes"
+	"context"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -125,7 +126,7 @@ func TestSlowTransfers(t *testing.T) {
 	var err error
 	// Do a quick timeout
 	go func() {
-		_, err = DownloadHTTP(transfers[0], filepath.Join(t.TempDir(), "test.txt"), "")
+		_, err = DownloadHTTP(context.Background(), transfers[0], filepath.Join(t.TempDir(), "test.txt"), "")
 		finishedChannel <- true
 	}()
 	select {
@@ -155,7 +156,7 @@ func TestConnectionError(t *testing.T) {
 	addr := l.Addr().String()
 	l.Close()
 
-	_, err = DownloadHTTP(TransferDetails{Url: url.URL{Host: addr, Scheme: "http"}, Proxy: false}, filepath.Join(t.TempDir(), "test.txt"), "")
+	_, err = DownloadHTTP(context.Background(), TransferDetails{Url: url.URL{Host: addr, Scheme: "http"}, Proxy: false}, filepath.Join(t.TempDir(), "test.txt"), "")
 
 	assert.IsType(t, &ConnectionSetupError{}, err)
 
@@ -250,7 +251,7 @@ func TestFullUpload(t *testing.T) {
 	assert.NoError(t, err, "Error parsing upload URL")
 	// Set the upload client to trust the server
 	UploadClient = ts.Client()
-	uploaded, err := UploadFile(tempFile.Name(), uploadURL, "Bearer test", testNamespace)
+	uploaded, err := UploadFile(context.Background(), tempFile.Name(), uploadURL, "Bearer test", testNamespace)
 	assert.NoError(t, err, "Error uploading file")
 	assert.Equal(t, int64(len(testFileContent)), uploaded, "Uploaded file size does not match")
 
@@ -259,7 +260,7 @@ func TestFullUpload(t *testing.T) {
 	assert.NoError(t, err, "Error parsing upload URL")
 	// Set the upload client to trust the server
 	UploadClient = ts.Client()
-	uploaded, err = UploadFile(tempFile.Name(), uploadURL, "Bearer test", testNamespace)
+	uploaded, err = UploadFile(context.Background(), tempFile.Name(), uploadURL, "Bearer test", testNamespace)
 	assert.NoError(t, err, "Error uploading file")
 	assert.Equal(t, int64(len(testFileContent)), uploaded, "Uploaded file size does not match")
 }

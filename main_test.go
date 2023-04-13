@@ -1,7 +1,7 @@
 package stashcp
 
 import (
-	"github.com/stretchr/testify/assert"
+	"context"
 	"net"
 	"net/url"
 	"os"
@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 // TestGetIps calls main.get_ips with a hostname, checking
@@ -37,7 +39,7 @@ func TestGetIps(t *testing.T) {
 func TestGetToken(t *testing.T) {
 
 	// Need a namespace for token acquisition
-	namespace, err := MatchNamespace("/user/foo")
+	namespace, err := MatchNamespace(context.Background(), "/user/foo")
 	assert.NoError(t, err)
 
 	url, err := url.Parse("osdf:///user/foo")
