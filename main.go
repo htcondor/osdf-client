@@ -640,7 +640,7 @@ func initTrace() (trace.TracerProvider, error) {
 func ShutDownTrace(tp trace.TracerProvider) {
 	if prv, ok := tp.(*sdkTrace.TracerProvider); ok {
 		if err := prv.Shutdown(context.Background()); err != nil {
-			log.Fatal(err)
+			log.Debugln("While shuttding down traces, an error occured: ", err)
 		}
 	}
 }
