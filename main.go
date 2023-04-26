@@ -483,6 +483,7 @@ func parse_job_ad(payload payloadStruct) { // TODO: needs the payload
 	var filename string
 	if isPresent {
 		filename = condorJobAd
+
 	} else if _, err := os.Stat(".job.ad"); err == nil {
 		filename = ".job.ad"
 	} else {
@@ -491,11 +492,9 @@ func parse_job_ad(payload payloadStruct) { // TODO: needs the payload
 	}
 
 	// https://stackoverflow.com/questions/28574609/how-to-apply-regexp-to-content-in-file-go
-
 	b, err := os.ReadFile(filename)
 	if err != nil {
 		log.Warningln("Can not read .job.ad file", err)
-		// log.Fatal(err)
 	}
 
 	// Get all matches from file
