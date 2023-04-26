@@ -479,7 +479,6 @@ func get_ips(name string) []string {
 func parse_job_ad(payload payloadStruct) { // TODO: needs the payload
 
 	//Parse the .job.ad file for the Owner (username) and ProjectName of the callee.
-
 	condorJobAd, isPresent := os.LookupEnv("_CONDOR_JOB_AD")
 	var filename string
 	if isPresent {
@@ -487,6 +486,7 @@ func parse_job_ad(payload payloadStruct) { // TODO: needs the payload
 	} else if _, err := os.Stat(".job.ad"); err == nil {
 		filename = ".job.ad"
 	} else {
+		log.Warningln(".job.ad doesn't exist", err)
 		return
 	}
 
@@ -494,7 +494,8 @@ func parse_job_ad(payload payloadStruct) { // TODO: needs the payload
 
 	b, err := os.ReadFile(filename)
 	if err != nil {
-		log.Fatal(err)
+		log.Warningln("Can not read .job.ad file", err)
+		// log.Fatal(err)
 	}
 
 	// Get all matches from file

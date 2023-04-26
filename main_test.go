@@ -200,3 +200,23 @@ func FuzzGetTokenName(f *testing.F) {
 		assert.Equal(t, strings.ToLower(orig), tokenName, "URL: "+urlString+"URL String: "+url.String()+" Scheme: "+url.Scheme)
 	})
 }
+
+func TestParseJobAd(t *testing.T) {
+	// Job ad file does not exist
+	err := os.WriteFile(".job.ad", []byte("Owner = \"john\"\nProjectName = \"test-project\""), 0644)
+	if err != nil {
+		t.Fatal("Failed to create job ad file")
+	}
+	payload := payloadStruct{}
+	os.Remove(".job.ad")
+	parse_job_ad(payload)
+
+	// Job ad file exists but cannot be read
+	payload = payloadStruct{}
+	err = os.WriteFile(".job.ad", []byte("Owner = \"john\"\nProjectName = \"test-project\""), 0000)
+	if err != nil {
+		t.Fatal("Failed to create unreadable job ad file")
+	}
+	parse_job_ad(payload)
+	os.Remove(".job.ad")
+}
