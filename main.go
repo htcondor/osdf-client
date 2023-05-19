@@ -254,6 +254,10 @@ func GetCachesFromNamespace(namespace Namespace) (caches []Cache, err error) {
 
 func correctURLWithUnderscore(sourceFile string) (string, string) {
 	schemeIndex := strings.Index(sourceFile, "://")
+	if schemeIndex == -1 {
+		return sourceFile, ""
+	}
+	
 	originalScheme := sourceFile[:schemeIndex]
 	if strings.Contains(originalScheme, "_") {
 		scheme := strings.ReplaceAll(originalScheme, "_", ".")
