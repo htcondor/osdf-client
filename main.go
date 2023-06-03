@@ -335,6 +335,7 @@ func DoStashCPSingle(sourceFile string, destination string, methods []string, re
 
 	ns, err := MatchNamespace(source_url.Path)
 	if err != nil {
+		AddError(err)
 		return 0, err
 	}
 
