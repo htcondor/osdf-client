@@ -201,7 +201,6 @@ func FuzzGetTokenName(f *testing.F) {
 	})
 }
 
-
 func TestCorrectURLWithUnderscore(t *testing.T) {
 	tests := []struct {
 		name           string
@@ -237,4 +236,14 @@ func TestCorrectURLWithUnderscore(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestParseNoJobAd(t *testing.T) {
+	// Job ad file does not exist
+	tempDir := t.TempDir()
+	path := filepath.Join(tempDir, ".job.ad")
+	os.Setenv("_CONDOR_JOB_AD", path)
+
+	payload := payloadStruct{}
+	parse_job_ad(payload)
 }
