@@ -245,7 +245,7 @@ func main() {
 		if errMsg == "" {
 			errMsg = result.Error()
 		}
-		log.Errorln("Failure downloading " + lastSrc + ": " + errMsg)
+		log.Errorln("Failure transferring " + lastSrc + ": " + errMsg)
 		if stashcp.ErrorsRetryable() {
 			log.Errorln("Errors are retryable")
 			os.Exit(11)

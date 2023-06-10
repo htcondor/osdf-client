@@ -334,8 +334,12 @@ func DoStashCPSingle(sourceFile string, destination string, methods []string, re
 		ns, err := MatchNamespace(dest_url.Path)
 		if err != nil {
 			log.Errorln("Failed to get namespace information:", err)
+			AddError(err)
+			return 0, err
 		}
-		return doWriteBack(source_url.Path, dest_url, ns)
+		_, err = doWriteBack(source_url.Path, dest_url, ns)
+		AddError(err)
+		return 0, err
 	}
 
 	if dest_url.Scheme == "file" {
