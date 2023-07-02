@@ -21,14 +21,13 @@ import (
 
 	grab "github.com/cavaliercoder/grab"
 	log "github.com/sirupsen/logrus"
+	"github.com/spf13/viper"
 	"github.com/studio-b12/gowebdav"
 	"github.com/vbauerster/mpb/v7"
 	"github.com/vbauerster/mpb/v7/decor"
 
 	namespaces "github.com/htcondor/osdf-client/v6/namespaces"
 )
-
-var env_prefixes = [...]string{"OSG", "OSDF"}
 
 var p = mpb.New()
 
@@ -81,22 +80,15 @@ func IsProxyEnabled() bool {
 	if _, isSet := os.LookupEnv("http_proxy"); !isSet {
 		return false
 	}
-	for _, prefix := range env_prefixes {
-		if _, isSet := os.LookupEnv(prefix + "_DISABLE_HTTP_PROXY"); isSet {
-			return false
-		}
+	if viper.IsSet("DisableHttpProxy") {
+		return false
 	}
 	return true
 }
 
 // Determine whether we are allowed to skip the proxy as a fallback
 func CanDisableProxy() bool {
-	for _, prefix := range env_prefixes {
-		if _, isSet := os.LookupEnv(prefix + "_DISABLE_PROXY_FALLBACK"); isSet {
-			return false
-		}
-	}
-	return true
+	return !viper.IsSet("DisableProxyFallback")
 }
 
 // ConnectionSetupError is an error that is returned when a connection to the remote server fails
@@ -462,17 +454,8 @@ func DownloadHTTP(transfer TransferDetails, dest string, token string) (int64, e
 	progressTicker := time.NewTicker(500 * time.Millisecond)
 	defer progressTicker.Stop()
 
-	// Store the last downloaded amount, and the bottom limit of the download
-	// Check the environment variable STASHCP_MINIMUM_DOWNLOAD_SPEED
-	downloadLimitStr := os.Getenv("STASHCP_MINIMUM_DOWNLOAD_SPEED")
-	var downloadLimit int64 = 1024 * 100
-	if downloadLimitStr != "" {
-		var err error
-		downloadLimit, err = strconv.ParseInt(downloadLimitStr, 10, 64)
-		if err != nil {
-			log.Errorln("Environment variable STASHCP_MINIMUM_DOWNLOAD_SPEED=", downloadLimitStr, " is not parsable as integer:", err, "defaulting to 1MB/s")
-		}
-	}
+	downloadLimit := viper.GetInt("MinimumDownloadSPeed")
+
 	// If we are doing a recursive, decrease the download limit by the number of likely workers ~5
 	if Options.Recursive {
 		downloadLimit /= 5
@@ -505,6 +488,9 @@ func DownloadHTTP(transfer TransferDetails, dest string, token string) (int64, e
 		)
 	}
 
+	stoppedTransferTimeout := viper.GetInt64("StoppedTransferTimeout")
+	slowTransferRampupTime := viper.GetInt64("SlowTransferRampupTime")
+	slowTransferWindow := viper.GetInt64("SlowTransferWindow")
 	var previousCompletedBytes int64 = 0
 	var previousCompletedTime = time.Now()
 	var startBelowLimit int64 = 0
@@ -531,8 +517,8 @@ Loop:
 			if resp.BytesComplete() == lastBytesComplete {
 				if noProgressStartTime.IsZero() {
 					noProgressStartTime = time.Now()
-				} else if time.Since(noProgressStartTime) > 100 * time.Second {
-					errMsg := "No progress for more than " + (time.Since(noProgressStartTime)/time.Second).String() + " seconds."
+				} else if time.Since(noProgressStartTime) > time.Duration(stoppedTransferTimeout) * time.Second {
+					errMsg := "No progress for more than " + time.Since(noProgressStartTime).Truncate(time.Millisecond).String()
 					log.Errorln(errMsg)
 					return 5, &StoppedTransferError{
 						Err: errMsg,
@@ -546,18 +532,18 @@ Loop:
 
 			// Check if we are downloading fast enough
 			if resp.BytesPerSecond() < float64(downloadLimit) {
-				// Give the download 120 seconds to start
-				if resp.Duration() < time.Second*120 {
+				// Give the download `slowTransferRampupTime` (default 120) seconds to start
+				if resp.Duration() < time.Second* time.Duration(slowTransferRampupTime) {
 					continue
 				} else if startBelowLimit == 0 {
 					log.Warnln("Download speed of ", resp.BytesPerSecond(), "bytes/s", " is below the limit of", downloadLimit, "bytes/s")
 					startBelowLimit = time.Now().Unix()
 					continue
-				} else if (time.Now().Unix() - startBelowLimit) < 30 {
-					// If the download is below the threshold for less than 30 seconds, continue
+				} else if (time.Now().Unix() - startBelowLimit) < slowTransferWindow {
+					// If the download is below the threshold for less than `SlowTransferWindow` (default 30) seconds, continue
 					continue
 				}
-				// The download is below the threshold for more than 30 seconds, cancel the download
+				// The download is below the threshold for more than `SlowTransferWindow` seconds, cancel the download
 				cancel()
 				if Options.ProgressBars {
 					var cancelledProgressBar = p.AddBar(0,
@@ -825,9 +811,8 @@ func IsDir(dirUrl *url.URL, token string, namespace namespaces.Namespace) (bool,
 		connectUrl = *dirListURL
 
 	} else {
-		//rootUrl.Path = ""
-		connectUrl.Host = "stash.osgconnect.net:1094"
-		connectUrl.Scheme = "http"
+		log.Errorln("Host for directory listings is unknown")
+		return false, errors.New("Host for directory listings is unknown")
 	}
 
 	c := gowebdav.NewClient(connectUrl.String(), "", "")
@@ -878,9 +863,8 @@ func walkDavDir(url *url.URL, token string, namespace namespaces.Namespace) ([]s
 		rootUrl = *dirListURL
 
 	} else {
-		rootUrl.Path = ""
-		rootUrl.Host = "stash.osgconnect.net:1094"
-		rootUrl.Scheme = "http"
+		log.Errorln("Host for directory listings is unknown")
+		return nil, errors.New("Host for directory listings is unknown")
 	}
 	log.Debugln("Dir list host: ", rootUrl.String())
 	c := gowebdav.NewClient(rootUrl.String(), "", "")
