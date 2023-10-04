@@ -154,22 +154,10 @@ func getToken(destination *url.URL, namespace namespaces.Namespace, isWrite bool
 		}
 
 		// Finally, look in the HTCondor runtime
-		token_filename := "scitokens.use"
-		if len(token_name) > 0 {
-			token_filename = token_name + ".use"
+		if token_location == "" {
+			token_location = discoverHTCondorToken(token_name)
 		}
-		log.Debugln("Looking for token file:", token_filename)
-		if credsDir, isCondorCredsSet := os.LookupEnv("_CONDOR_CREDS"); token_location == "" && isCondorCredsSet {
-			// Token wasn't specified on the command line or environment, try the default scitoken
-			if _, err := os.Stat(filepath.Join(credsDir, token_filename)); err != nil {
-				log.Warningln("Environment variable _CONDOR_CREDS is set, but file being point to does not exist:", err)
-			} else {
-				token_location = filepath.Join(credsDir, token_filename)
-			}
-		}
-		if _, err := os.Stat(".condor_creds/" + token_filename); err == nil && token_location == "" {
-			token_location, _ = filepath.Abs(".condor_creds/" + token_filename)
-		}
+
 		if token_location == "" {
 			value, err := AcquireToken(destination, namespace, isWrite)
 			if err == nil {
@@ -266,6 +254,38 @@ func correctURLWithUnderscore(sourceFile string) (string, string) {
 		sourceFile = scheme + sourceFile[schemeIndex:]
 	}
 	return sourceFile, originalScheme
+}
+
+func discoverHTCondorToken(token_name string) (string) {
+	token_location := ""
+
+	// Tokens with dots in their name may need to have dots converted to underscores.
+	if strings.Contains(token_name, ".") {
+		underscore_token_name := strings.ReplaceAll(token_name, ".", "_")
+		// If we find a token after replacing dots, then we're already done.
+		token_location = discoverHTCondorToken(underscore_token_name)
+		if token_location != "" {
+			return token_location
+		}
+	}
+
+	token_filename := "scitokens.use"
+	if len(token_name) > 0 {
+		token_filename = token_name + ".use"
+	}
+	log.Debugln("Looking for token file:", token_filename)
+	if credsDir, isCondorCredsSet := os.LookupEnv("_CONDOR_CREDS"); token_location == "" && isCondorCredsSet {
+		// Token wasn't specified on the command line or environment, try the default scitoken
+		if _, err := os.Stat(filepath.Join(credsDir, token_filename)); err != nil {
+			log.Warningln("Environment variable _CONDOR_CREDS is set, but file being point to does not exist:", err)
+		} else {
+			token_location = filepath.Join(credsDir, token_filename)
+		}
+	}
+	if _, err := os.Stat(".condor_creds/" + token_filename); err == nil && token_location == "" {
+		token_location, _ = filepath.Abs(".condor_creds/" + token_filename)
+	}
+	return token_location
 }
 
 // Start the transfer, whether read or write back
