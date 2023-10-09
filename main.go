@@ -256,36 +256,36 @@ func correctURLWithUnderscore(sourceFile string) (string, string) {
 	return sourceFile, originalScheme
 }
 
-func discoverHTCondorToken(token_name string) (string) {
-	token_location := ""
+func discoverHTCondorToken(tokenName string) (string) {
+	tokenLocation := ""
 
 	// Tokens with dots in their name may need to have dots converted to underscores.
-	if strings.Contains(token_name, ".") {
-		underscore_token_name := strings.ReplaceAll(token_name, ".", "_")
+	if strings.Contains(tokenName, ".") {
+		underscoreTokenName := strings.ReplaceAll(tokenName, ".", "_")
 		// If we find a token after replacing dots, then we're already done.
-		token_location = discoverHTCondorToken(underscore_token_name)
-		if token_location != "" {
-			return token_location
+		tokenLocation = discoverHTCondorToken(underscoreTokenName)
+		if tokenLocation != "" {
+			return tokenLocation
 		}
 	}
 
-	token_filename := "scitokens.use"
-	if len(token_name) > 0 {
-		token_filename = token_name + ".use"
+	tokenFilename := "scitokens.use"
+	if len(tokenName) > 0 {
+		tokenFilename = tokenName + ".use"
 	}
-	log.Debugln("Looking for token file:", token_filename)
-	if credsDir, isCondorCredsSet := os.LookupEnv("_CONDOR_CREDS"); token_location == "" && isCondorCredsSet {
+	log.Debugln("Looking for token file:", tokenFilename)
+	if credsDir, isCondorCredsSet := os.LookupEnv("_CONDOR_CREDS"); tokenLocation == "" && isCondorCredsSet {
 		// Token wasn't specified on the command line or environment, try the default scitoken
-		if _, err := os.Stat(filepath.Join(credsDir, token_filename)); err != nil {
+		if _, err := os.Stat(filepath.Join(credsDir, tokenFilename)); err != nil {
 			log.Warningln("Environment variable _CONDOR_CREDS is set, but file being point to does not exist:", err)
 		} else {
-			token_location = filepath.Join(credsDir, token_filename)
+			tokenLocation = filepath.Join(credsDir, tokenFilename)
 		}
 	}
-	if _, err := os.Stat(".condor_creds/" + token_filename); err == nil && token_location == "" {
-		token_location, _ = filepath.Abs(".condor_creds/" + token_filename)
+	if _, err := os.Stat(".condor_creds/" + tokenFilename); err == nil && tokenLocation == "" {
+		tokenLocation, _ = filepath.Abs(".condor_creds/" + tokenFilename)
 	}
-	return token_location
+	return tokenLocation
 }
 
 // Start the transfer, whether read or write back
