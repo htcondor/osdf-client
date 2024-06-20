@@ -41,6 +41,16 @@ func (e *StoppedTransferError) Error() string {
 }
 
 
+type HttpErrResp struct {
+	Code int
+	Err string
+}
+
+func (e *HttpErrResp) Error() string {
+	return e.Err
+}
+
+
 // SlowTransferError is an error that is returned when a transfer takes longer than the configured timeout
 type SlowTransferError struct {
 	BytesTransferred int64
@@ -643,7 +653,8 @@ Loop:
 	// prior attempt.
 	if resp.HTTPResponse.StatusCode != 200 && resp.HTTPResponse.StatusCode != 206 {
 		log.Debugln("Got failure status code:", resp.HTTPResponse.StatusCode)
-		return 0, errors.New("failure status code")
+		return 0, &HttpErrResp{resp.HTTPResponse.StatusCode, fmt.Sprintf("Request failed (HTTP status %d): %s",
+		    resp.HTTPResponse.StatusCode, resp.Err().Error())}
 	}
 	log.Debugln("HTTP Transfer was successful")
 	return resp.BytesComplete(), nil
@@ -762,7 +773,8 @@ Loop:
 		case response := <-responseChan:
 			if response.StatusCode != 200 {
 				log.Errorln("Got failure status code:", response.StatusCode)
-				lastError = errors.New("failure status code")
+				lastError = &HttpErrResp{response.StatusCode, fmt.Sprintf("Request failed (HTTP status %d)",
+				    response.StatusCode)}
 				break Loop
 			}
 			break Loop
