@@ -1,3 +1,6 @@
+This client has been superseded by the [Pelican Platform](https://github.com/PelicanPlatform/pelican) and all future development will be performed there instead.
+-----------------------------------------------------------------------------------------------------------------------------------------------------------------
+
 Open Science Data Federation (OSDF) Client
 ==========================================
 
